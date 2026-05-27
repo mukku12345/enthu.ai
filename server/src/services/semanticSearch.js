@@ -10,7 +10,7 @@ const FIELD_WEIGHTS = {
   customerSentiment: 1.7,
   flags: 2.8,
   flagDetails: 2.4,
-  transcript: 3,
+  transcript: 5,
   timelineInsights: 2,
   segmentAnalysis: 1.8,
   scorecard: 1.4
@@ -231,6 +231,32 @@ const exactPhraseScore = (query, call) => {
   return Math.min(score, 0.25);
 };
 
+const transcriptMatchScore = (query, call) => {
+  const normalizedQuery = normalizeText(query);
+  const transcriptText = normalizeText(
+    (call.transcript ?? []).map((turn) => `${turn.speaker} ${turn.text} ${turn.emotion ?? ""}`).join(" ")
+  );
+
+  if (!normalizedQuery || !transcriptText) return 0;
+  if (transcriptText.includes(normalizedQuery)) return 0.45;
+
+  const queryTokens = wordsFrom(normalizedQuery);
+  if (!queryTokens.length) return 0;
+
+  const transcriptTokens = new Set(wordsFrom(transcriptText));
+  const tokenMatches = queryTokens.filter((token) => transcriptTokens.has(token)).length;
+  const tokenScore = tokenMatches / queryTokens.length;
+
+  let phraseScore = 0;
+  for (let index = 0; index < queryTokens.length - 1; index += 1) {
+    if (transcriptText.includes(`${queryTokens[index]} ${queryTokens[index + 1]}`)) {
+      phraseScore += 0.08;
+    }
+  }
+
+  return Math.min(tokenScore * 0.32 + phraseScore, 0.42);
+};
+
 const rankByLexicalFallback = (calls, query) => {
   const normalizedQuery = normalizeText(query);
   if (!normalizedQuery) return calls;
@@ -246,15 +272,18 @@ const rankByLexicalFallback = (calls, query) => {
       const weightedDocumentVector = applyIdf(vector, idf);
       return {
         call,
-        score: cosine(queryVector, weightedDocumentVector) + exactPhraseScore(normalizedQuery, call)
+        score:
+          cosine(queryVector, weightedDocumentVector) +
+          exactPhraseScore(normalizedQuery, call) +
+          transcriptMatchScore(normalizedQuery, call)
       };
     })
-    .filter((entry) => entry.score > 0.035)
+    .filter((entry) => entry.score > 0.015)
     .sort((a, b) => b.score - a.score);
 
   const bestScore = ranked[0]?.score ?? 0;
   return ranked
-    .filter((entry) => entry.score >= bestScore * 0.6)
+    .filter((entry) => entry.score >= Math.max(0.015, bestScore * 0.35))
     .map((entry) => entry.call);
 };
 
