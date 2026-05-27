@@ -1,4 +1,5 @@
 import React from "react";
+import { X } from "lucide-react";
 
 export default function SearchBox({ icon: Icon, query, onQueryChange, onSearch }) {
   const submitSearch = () => onSearch(query);
@@ -12,7 +13,7 @@ export default function SearchBox({ icon: Icon, query, onQueryChange, onSearch }
       <div>
         <p className="eyebrow">Natural language QA search</p>
         <h3>Search by meaning</h3>
-        <span>Semantic search demo: matching by meaning, not exact keyword.</span>
+        <span>Find calls by issue, emotion, resolution, score, or agent behavior.</span>
       </div>
       <div className="search-box">
         <Icon size={18} />
@@ -26,7 +27,7 @@ export default function SearchBox({ icon: Icon, query, onQueryChange, onSearch }
         />
         {query && (
           <button className="icon-action" onClick={clearSearch} type="button" title="Clear search">
-            ×
+            <X size={16} />
           </button>
         )}
         <button onClick={submitSearch}>Search</button>
