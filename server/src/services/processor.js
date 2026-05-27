@@ -4,6 +4,8 @@ import { notifyFailure } from "./notifier.js";
 import { transcribeCallWithProvider } from "./transcriptionProvider.js";
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const hasAssemblyAI = () => Boolean(process.env.ASSEMBLYAI_API_KEY);
+const allowDemoFallback = () => process.env.ALLOW_DEMO_FALLBACK === "true";
 
 const buildTranscript = (seed) => {
   const refundScenario = seed.includes("refund") || seed.includes("billing");
@@ -121,17 +123,68 @@ const scoreCall = (seed) => {
 
 const textFromTranscript = (transcript) => transcript.map((turn) => turn.text).join(" ").toLowerCase();
 
-const summarizeTranscript = (transcript, seed) => {
+const countMatches = (text, pattern) => text.match(pattern)?.length ?? 0;
+
+const hasMatch = (text, pattern) => {
+  pattern.lastIndex = 0;
+  return pattern.test(text);
+};
+
+const average = (values, fallback = 0) =>
+  values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : fallback;
+
+const clampScore = (score) => Math.max(45, Math.min(96, Math.round(score)));
+
+const customerRiskPattern =
+  /\b(angry|upset|frustrat|cancel|refund|charge|charged|billing|complain|scam|fraud|wrong|late|delay|broken|not working|issue|problem|poor|bad|never|again|escalat|supervisor|manager|callback)\b/g;
+
+const agentEmpathyPattern =
+  /\b(sorry|apolog|understand|appreciate|help|concern|frustrat|right away|let me|i can)\b/g;
+
+const processPattern =
+  /\b(verify|verification|account|policy|eligible|document|ticket|case|reference|process|check|review|history|details)\b/g;
+
+const resolutionPattern =
+  /\b(resolved|resolution|confirm|confirmation|sent|email|refund|replacement|fixed|done|next step|follow up|callback|submit|created|booked)\b/g;
+
+const negativePattern =
+  /\b(no|not|never|cannot|can't|wont|won't|failed|issue|problem|angry|frustrat|bad|wrong|delay|late|scam|fraud|complain)\b/g;
+
+const positivePattern =
+  /\b(thanks|thank|okay|ok|great|good|resolved|helpful|appreciate|confirm|done)\b/g;
+
+const inferSentiment = (text, explicitSentiment = 0) => {
+  if (Math.abs(explicitSentiment) > 0.05) return explicitSentiment;
+
+  const negative = countMatches(text, negativePattern);
+  const positive = countMatches(text, positivePattern);
+  if (negative === positive) return 0;
+  return Math.max(-0.7, Math.min(0.7, (positive - negative) * 0.18));
+};
+
+const summarizeTranscript = (transcript, seed = "") => {
   const text = textFromTranscript(transcript);
-  const topic = text.includes("refund") || seed.includes("refund")
+  const agentText = transcript
+    .filter((turn) => turn.speaker === "Agent")
+    .map((turn) => turn.text)
+    .join(" ")
+    .toLowerCase();
+  const customerTurns = transcript.filter((turn) => turn.speaker === "Customer");
+  const topic = text.includes("refund") || text.includes("charge") || seed.includes("refund")
     ? "a refund or billing concern"
-    : "a support issue that needed a clear resolution";
-  const customerTone = transcript.some((turn) => turn.speaker === "Customer" && turn.sentiment < -0.4)
+    : text.includes("scam") || text.includes("fraud")
+      ? "a possible fraud or scam concern"
+      : text.includes("order") || text.includes("delivery")
+        ? "an order or delivery issue"
+        : "a support issue that needed a clear resolution";
+  const customerTone = customerTurns.some((turn) => inferSentiment(turn.text.toLowerCase(), turn.sentiment) < -0.35)
     ? "The customer showed frustration during the call."
     : "The customer tone stayed mostly neutral.";
-  const agentTone = transcript.some((turn) => turn.speaker === "Agent" && turn.sentiment > 0.3)
+  const agentTone = transcript.some((turn) => turn.speaker === "Agent" && inferSentiment(turn.text.toLowerCase(), turn.sentiment) > 0.25)
     ? "The agent used positive, reassuring language."
-    : "The agent kept the conversation procedural.";
+    : countMatches(agentText, processPattern) > countMatches(agentText, agentEmpathyPattern)
+      ? "The agent kept the conversation procedural."
+      : "The agent gave limited reassurance.";
 
   return `The call focused on ${topic}. ${customerTone} ${agentTone} The review should focus on whether the agent acknowledged the concern, followed the right process, explained the next step, and closed with confirmation.`;
 };
@@ -143,17 +196,49 @@ const scoreTranscript = (transcript, seed) => {
     .map((turn) => turn.text)
     .join(" ")
     .toLowerCase();
-
-  const empathy = /sorry|understand|frustrat|appreciate|help/.test(agentText) ? 90 : 72;
-  const process = /verify|verification|account|policy|eligible|document/.test(agentText) ? 88 : 70;
-  const communication = transcript.length >= 4 && agentText.length > 80 ? 86 : 74;
-  const closing = /confirm|anything else|sent|email|resolved|next step/.test(agentText) ? 86 : 68;
+  const customerText = transcript
+    .filter((turn) => turn.speaker === "Customer")
+    .map((turn) => turn.text)
+    .join(" ")
+    .toLowerCase();
 
   if (!text.trim()) return scoreCall(seed);
 
-  const overall = Math.round((empathy + process + communication + closing) / 4);
+  const agentTurns = transcript.filter((turn) => turn.speaker === "Agent");
+  const customerTurns = transcript.filter((turn) => turn.speaker === "Customer");
+  const agentWordCount = agentText.split(/\s+/).filter(Boolean).length;
+  const customerWordCount = customerText.split(/\s+/).filter(Boolean).length;
+  const totalWordCount = Math.max(agentWordCount + customerWordCount, 1);
+  const talkRatio = agentWordCount / totalWordCount;
+  const customerSentiments = customerTurns.map((turn) => inferSentiment(turn.text.toLowerCase(), turn.sentiment));
+  const agentSentiments = agentTurns.map((turn) => inferSentiment(turn.text.toLowerCase(), turn.sentiment));
+  const customerAvg = average(customerSentiments);
+  const agentAvg = average(agentSentiments);
+  const customerLow = Math.min(...customerSentiments, 0);
+  const riskCount = countMatches(`${customerText} ${seed}`, customerRiskPattern);
+  const empathyHits = countMatches(agentText, agentEmpathyPattern);
+  const processHits = countMatches(agentText, processPattern);
+  const resolutionHits = countMatches(agentText, resolutionPattern);
+  const questionCount = countMatches(agentText, /\?/g);
+  const closingTurn = agentTurns.at(-1)?.text?.toLowerCase() ?? "";
+  const closedClearly = hasMatch(closingTurn, resolutionPattern) || /anything else|confirmation|sent/.test(closingTurn);
+
+  const empathy = clampScore(72 + empathyHits * 5 + agentAvg * 14 + Math.min(customerAvg, 0) * 8 - riskCount * 2);
+  const process = clampScore(68 + processHits * 5 + (agentText.length > 120 ? 5 : 0) - (processHits === 0 ? 10 : 0));
+  const communication = clampScore(
+    70 +
+      Math.min(transcript.length, 10) * 2 +
+      (talkRatio >= 0.35 && talkRatio <= 0.68 ? 8 : -6) +
+      Math.min(questionCount, 3) * 3 -
+      riskCount
+  );
+  const closing = clampScore(62 + resolutionHits * 5 + (closedClearly ? 10 : 0) - (customerLow < -0.45 && !closedClearly ? 8 : 0));
+  const resolution = clampScore(58 + resolutionHits * 7 + (closedClearly ? 8 : 0) - riskCount * 2);
+  const handling = clampScore((empathy + communication + Math.max(55, 82 + customerAvg * 20 - riskCount * 2)) / 3);
+
+  const overall = clampScore((handling + process + communication + empathy + closing + resolution) / 6);
   return {
-    handling: empathy,
+    handling,
     process,
     communication,
     empathy,
@@ -214,20 +299,44 @@ const buildFlagDetails = (flags) =>
       }[flag] ?? "QA review recommended."
   }));
 
-const buildTimelineInsights = () => [
-  "Customer frustration peaked at 02:10 during refund discussion.",
-  "Agent tone stayed neutral while customer emotion escalated.",
-  "Agent recovered after acknowledging the issue.",
-  "Customer settled after resolution was offered."
-];
+const buildTimelineInsights = (transcript, scorecard) => {
+  const customerTurns = transcript.filter((turn) => turn.speaker === "Customer");
+  const peak = customerTurns.reduce(
+    (max, turn) => ((turn.toneScore ?? 0) > (max?.toneScore ?? -1) ? turn : max),
+    null
+  );
+  const agentAvg =
+    transcript
+      .filter((turn) => turn.speaker === "Agent")
+      .reduce((sum, turn) => sum + (turn.toneScore ?? 50), 0) /
+    Math.max(transcript.filter((turn) => turn.speaker === "Agent").length, 1);
 
-const buildSegmentAnalysis = () => [
-  { segment: "Opening", finding: "Agent opened calmly and attempted account verification." },
-  { segment: "Issue discovery", finding: "Customer explained the billing/refund concern and prior frustration." },
-  { segment: "Conflict/escalation", finding: "Customer emotion rose faster than the agent adapted tone." },
-  { segment: "Resolution", finding: "Agent moved from explanation to an actionable fix." },
-  { segment: "Closing", finding: "Agent confirmed follow-up and documented the outcome." }
-];
+  return [
+    peak
+      ? `Customer emotion peaked at ${peak.time ?? peak.start} during: "${peak.text.slice(0, 90)}${peak.text.length > 90 ? "..." : ""}"`
+      : "Customer emotional peak could not be isolated from the transcript.",
+    agentAvg < 55
+      ? "Agent tone stayed mostly neutral while customer emotion moved higher."
+      : "Agent tone became more active during higher-intensity customer moments.",
+    scorecard.empathy >= 80
+      ? "Agent used empathy or acknowledgement language in the transcript."
+      : "Empathy language was limited and should be reviewed by QA.",
+    scorecard.resolution >= 80
+      ? "The call appears to close with a concrete next step or confirmation."
+      : "The call may need QA follow-up because the resolution was not clearly confirmed."
+  ];
+};
+
+const buildSegmentAnalysis = (transcript) => {
+  const pickText = (index) => transcript[index]?.text ?? "No clear transcript segment available.";
+  return [
+    { segment: "Opening", finding: pickText(0) },
+    { segment: "Issue discovery", finding: pickText(1) },
+    { segment: "Conflict/escalation", finding: pickText(Math.floor(transcript.length / 2)) },
+    { segment: "Resolution", finding: pickText(Math.max(transcript.length - 2, 0)) },
+    { segment: "Closing", finding: pickText(Math.max(transcript.length - 1, 0)) }
+  ];
+};
 
 const getCustomerSentiment = (transcript) => {
   const customerTurns = transcript.filter((turn) => turn.speaker === "Customer");
@@ -251,21 +360,27 @@ export const processCall = async (callId) => {
       fileName: call.originalName,
       message: `Transcription started for ${call.originalName}`
     });
-    await wait(900);
+    await wait(300);
 
     const seed = `${call.originalName} ${call.storedName}`.toLowerCase();
-    if (seed.includes("fail")) throw new Error(`Transcription failed for call ${call.originalName}`);
 
     let providerResult = null;
     try {
       providerResult = await transcribeCallWithProvider(call);
     } catch (error) {
-      console.warn(`Transcription provider unavailable, using fallback: ${error.message}`);
+      if (hasAssemblyAI() || !allowDemoFallback()) throw error;
+      console.warn(`AssemblyAI is not configured, using opt-in demo fallback: ${error.message}`);
     }
 
     const transcript = providerResult?.transcript ?? buildTranscript(seed);
     await updateCall(callId, { progress: 42, stage: "Separating agent and customer speakers", transcript });
-    await wait(800);
+    addEvent({
+      type: "processing",
+      callId,
+      fileName: call.originalName,
+      message: `Speaker diarization completed for ${call.originalName}`
+    });
+    await wait(300);
 
     const scorecard = providerResult ? scoreTranscript(transcript, seed) : scoreCall(seed);
     const flags = providerResult
@@ -282,7 +397,20 @@ export const processCall = async (callId) => {
     const customerSentiment = getCustomerSentiment(transcript);
 
     await updateCall(callId, { progress: 72, stage: "Scoring process, tone, and resolution" });
-    await wait(800);
+    addEvent({
+      type: "processing",
+      callId,
+      fileName: call.originalName,
+      message: `Emotion and QA scoring completed for ${call.originalName}`
+    });
+    await wait(300);
+
+    addEvent({
+      type: "processing",
+      callId,
+      fileName: call.originalName,
+      message: `Semantic search text generated for ${call.originalName}`
+    });
 
     await updateCall(callId, {
       status: "completed",
@@ -297,8 +425,8 @@ export const processCall = async (callId) => {
       emotionTimeline: providerResult ? buildEmotionTimelineFromTranscript(transcript) : buildEmotionTimeline(),
       flags,
       flagDetails: buildFlagDetails(flags),
-      timelineInsights: buildTimelineInsights(),
-      segmentAnalysis: buildSegmentAnalysis(),
+      timelineInsights: buildTimelineInsights(transcript, scorecard),
+      segmentAnalysis: buildSegmentAnalysis(transcript),
       resolutionStatus,
       customerSentiment,
       semanticText: `${summary} ${flags.join(" ")} ${resolutionStatus} ${customerSentiment} ${textFromTranscript(transcript)}`,

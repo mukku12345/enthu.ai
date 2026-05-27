@@ -1,4 +1,5 @@
 import React from "react";
+import { Trash2 } from "lucide-react";
 import EmptyState from "../shared/EmptyState.jsx";
 import { formatDate } from "../../utils/date.js";
 
@@ -11,7 +12,12 @@ const visibleFlags = [
   "Process missed"
 ];
 
-export default function CallList({ calls, selectedId, onSelect }) {
+export default function CallList({ calls, selectedId, onSelect, onRequestDelete }) {
+  const handleDelete = (event, call) => {
+    event.stopPropagation();
+    onRequestDelete(call);
+  };
+
   return (
     <section className="call-table-panel">
       <div className="section-title">
@@ -27,29 +33,45 @@ export default function CallList({ calls, selectedId, onSelect }) {
           <span>Sentiment</span>
           <span>Resolution</span>
           <span>Flags</span>
+          <span>Action</span>
         </div>
         {calls.map((call) => (
-          <button
+          <div
             className={`call-table-row ${selectedId === call.id ? "active" : ""}`}
             key={call.id}
             onClick={() => onSelect(call)}
-            type="button"
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") onSelect(call);
+            }}
+            role="button"
+            tabIndex={0}
           >
-            <strong>{call.fileName ?? call.originalName}</strong>
-            <span>{formatDate(call.uploadedAt ?? call.createdAt)}</span>
-            <span className={`status-badge ${call.status}`}>{call.status}</span>
-            <span>{call.overallScore ?? call.scorecard?.overall ?? "--"}</span>
-            <span>{call.customerSentiment ?? "--"}</span>
-            <span>{call.resolutionStatus ?? "--"}</span>
-            <span className="table-flags">
-              {((call.flags?.length ? call.flags : ["Angry customer"])
+            <strong data-label="File">{call.fileName ?? call.originalName}</strong>
+            <span data-label="Uploaded">{formatDate(call.uploadedAt ?? call.createdAt)}</span>
+            <span className={`status-badge ${call.status}`} data-label="Status">
+              {call.status}
+            </span>
+            <span data-label="Score">{call.overallScore ?? call.scorecard?.overall ?? "--"}</span>
+            <span data-label="Sentiment">{call.customerSentiment ?? "--"}</span>
+            <span data-label="Resolution">{call.resolutionStatus ?? "--"}</span>
+            <span className="table-flags" data-label="Flags">
+              {((call.flags?.length ? call.flags : [])
                 .filter((flag) => visibleFlags.includes(flag))
                 .slice(0, 3))
                 .map((flag) => (
                   <i key={flag}>{flag}</i>
                 ))}
             </span>
-          </button>
+            <button
+              aria-label={`Delete ${call.fileName ?? call.originalName}`}
+              className="row-delete"
+              onClick={(event) => handleDelete(event, call)}
+              title="Delete call"
+              type="button"
+            >
+              <Trash2 size={16} />
+            </button>
+          </div>
         ))}
       </div>
       {calls.length === 0 && (

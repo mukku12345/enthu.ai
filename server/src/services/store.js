@@ -80,3 +80,13 @@ export const updateCall = async (id, patch) => {
   memoryCalls[index] = { ...memoryCalls[index], ...patch, updatedAt: new Date() };
   return normalize(memoryCalls[index]);
 };
+
+export const deleteCall = async (id) => {
+  if (hasMongo()) {
+    if (mongoose.Types.ObjectId.isValid(id)) return normalize(await Call.findByIdAndDelete(id));
+    return normalize(await Call.findOneAndDelete({ id }));
+  }
+  const call = memoryCalls.find((item) => item.id === id || item._id === id);
+  memoryCalls = memoryCalls.filter((item) => item.id !== id && item._id !== id);
+  return normalize(call);
+};

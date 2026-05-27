@@ -1,25 +1,13 @@
 import axios from "axios";
-import { buildDemoFailedCall, normalizeCallForDemo } from "../utils/demoCall.js";
+import { normalizeCallForDemo } from "../utils/demoCall.js";
 
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || "http://localhost:5000/api"
 });
 
-const hiddenDemoCalls = () => {
-  try {
-    return JSON.parse(localStorage.getItem("hiddenDemoCalls") || "[]");
-  } catch {
-    return [];
-  }
-};
-
 export const getCalls = async (query = "") => {
   const { data } = await api.get("/calls", { params: query ? { q: query } : {} });
-  const calls = data.map(normalizeCallForDemo);
-  const shouldShowDemoFailed =
-    !hiddenDemoCalls().includes("demo-failed-call") &&
-    !calls.some((call) => call.status === "failed");
-  return shouldShowDemoFailed ? [buildDemoFailedCall(), ...calls] : calls;
+  return data.map(normalizeCallForDemo);
 };
 
 export const uploadCall = async (file) => {
@@ -50,4 +38,15 @@ export const uploadCalls = async (files) => {
 export const retryCall = async (id) => {
   const { data } = await api.post(`/calls/${id}/retry`);
   return normalizeCallForDemo(data);
+};
+
+export const deleteCall = async (id) => {
+  if (String(id).startsWith("demo-")) return { ok: true };
+  await api.delete(`/calls/${id}`);
+  return { ok: true };
+};
+
+export const getEvents = async () => {
+  const { data } = await api.get("/events");
+  return data;
 };

@@ -186,7 +186,7 @@ const legacyFlagMap = {
 const normalizeFlags = (flags = []) => {
   const mapped = flags.map((flag) => legacyFlagMap[flag] ?? flag);
   const unique = [...new Set(mapped.filter(Boolean))];
-  return unique.length ? unique : demoFlags;
+  return unique;
 };
 
 const flagDetails = demoFlags.map((flag) => ({
@@ -221,25 +221,19 @@ const isLegacyFallback = (call) =>
 
 export const normalizeCallForDemo = (call) => {
   const fileName = call.fileName ?? call.originalName ?? "uploaded-call.mp3";
-  const scenario = scenarioFor(fileName, call.id ?? call._id ?? call.storedName);
-  const copy = scenarioCopy[scenario] ?? scenarioCopy.refund;
   const isFailed = call.status === "failed";
-  const shouldUseDemoProfile = isLegacyFallback(call);
-  const scorecard = shouldUseDemoProfile ? scorecardFor(scenario) : call.scorecard?.overall ? call.scorecard : scorecardFor(scenario);
-  const transcript = shouldUseDemoProfile || !call.transcript?.length ? demoTranscript(fileName, scenario) : call.transcript;
-  const flags = shouldUseDemoProfile
-    ? copy.flags
-    : isFailed
-      ? normalizeFlags([...(call.flags ?? []), "Process missed", "Unresolved"])
-      : normalizeFlags(call.flags);
-  const emotionTimeline = !shouldUseDemoProfile && call.emotionTimeline?.length
+  const scorecard = call.scorecard ?? {};
+  const flags = isFailed
+    ? normalizeFlags([...(call.flags ?? []), "Process missed", "Unresolved"])
+    : normalizeFlags(call.flags ?? []);
+  const emotionTimeline = call.emotionTimeline?.length
     ? call.emotionTimeline.map((point, index) => ({
         time: point.time ?? `0${Math.floor((point.second ?? index * 30) / 60)}:${String((point.second ?? index * 30) % 60).padStart(2, "0")}`,
         agent: point.agent ?? 50,
         customer: point.customer ?? 50,
         ...point
       }))
-    : demoEmotionTimeline(scenario);
+    : [];
 
   return {
     ...call,
@@ -258,33 +252,17 @@ export const normalizeCallForDemo = (call) => {
     summary:
       call.summary ??
       (isFailed
-        ? `Processing failed for ${fileName}. Demo failure context: transcription could not complete and QA ops was notified.`
-        : `Demo QA analysis: the customer contacted support about ${copy.issue}. The agent verified context, acknowledged the concern, and worked toward a ${copy.resolutionStatus.toLowerCase()} outcome. QA should review tone matching, process adherence, and whether the closing clearly documented next steps.`),
-    transcript,
+        ? `Processing failed for ${fileName}. QA ops was notified.`
+        : undefined),
+    transcript: call.transcript ?? [],
     emotionTimeline,
     flags,
-    flagDetails: shouldUseDemoProfile || !call.flagDetails?.length ? flagDetailsFor(flags) : call.flagDetails,
-    timelineInsights: call.timelineInsights?.length
-      ? call.timelineInsights
-      : [
-          "Customer frustration peaked at 02:10 during refund discussion.",
-          `Customer frustration peaked at 02:10 during ${copy.issue}.`,
-          "Agent tone stayed neutral while customer emotion escalated.",
-          "Agent recovered after acknowledging the issue.",
-          copy.resolutionStatus === "Resolved" ? "Customer settled after resolution was offered." : "Customer remained unresolved and needed follow-up."
-        ],
-    segmentAnalysis: call.segmentAnalysis?.length
-      ? call.segmentAnalysis
-      : [
-          { segment: "Opening", finding: "Agent opened calmly and started verification." },
-          { segment: "Issue discovery", finding: `Customer explained ${copy.issue}.` },
-          { segment: "Conflict/escalation", finding: "Customer tone rose faster than agent tone adapted." },
-          { segment: "Resolution", finding: copy.resolution },
-          { segment: "Closing", finding: copy.resolutionStatus === "Resolved" ? "Agent confirmed follow-up and documentation." : "Call remained open for QA follow-up." }
-        ],
-    customerSentiment: shouldUseDemoProfile ? copy.sentiment : call.customerSentiment ?? (isFailed ? "Unknown" : copy.sentiment),
-    resolutionStatus: shouldUseDemoProfile ? copy.resolutionStatus : call.resolutionStatus ?? (isFailed ? "Failed" : copy.resolutionStatus),
-    analysisProvider: call.analysisProvider ?? "demo-fallback"
+    flagDetails: call.flagDetails?.length ? call.flagDetails : flagDetailsFor(flags),
+    timelineInsights: call.timelineInsights ?? [],
+    segmentAnalysis: call.segmentAnalysis ?? [],
+    customerSentiment: call.customerSentiment ?? (isFailed ? "Unknown" : "--"),
+    resolutionStatus: call.resolutionStatus ?? (isFailed ? "Failed" : "--"),
+    analysisProvider: call.analysisProvider
   };
 };
 

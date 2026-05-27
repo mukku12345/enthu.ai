@@ -23,16 +23,36 @@ const assemblyHeaders = () => ({
   authorization: process.env.ASSEMBLYAI_API_KEY
 });
 
+const speechModels = () =>
+  (process.env.ASSEMBLYAI_SPEECH_MODELS || "universal-3-pro,universal-2")
+    .split(",")
+    .map((model) => model.trim())
+    .filter(Boolean);
+
+const readAssemblyError = async (response) => {
+  const text = await response.text();
+  try {
+    const data = JSON.parse(text);
+    return data.error || data.message || text;
+  } catch {
+    return text;
+  }
+};
+
 const uploadLocalAudio = async (storagePath) => {
   const audio = await fs.readFile(storagePath);
   const response = await fetch(`${ASSEMBLY_BASE_URL}/upload`, {
     method: "POST",
-    headers: assemblyHeaders(),
+    headers: {
+      ...assemblyHeaders(),
+      "content-type": "application/octet-stream"
+    },
     body: audio
   });
 
   if (!response.ok) {
-    throw new Error(`AssemblyAI upload failed with ${response.status}`);
+    const detail = await readAssemblyError(response);
+    throw new Error(`AssemblyAI upload failed with ${response.status}: ${detail}`);
   }
 
   const data = await response.json();
@@ -45,28 +65,60 @@ const getAudioUrl = async (call) => {
   throw new Error("No readable audio source available for transcription");
 };
 
-const requestTranscript = async (audioUrl) => {
+const submitTranscriptRequest = async (payload) => {
   const response = await fetch(`${ASSEMBLY_BASE_URL}/transcript`, {
     method: "POST",
     headers: {
       ...assemblyHeaders(),
       "content-type": "application/json"
     },
-    body: JSON.stringify({
-      audio_url: audioUrl,
-      speaker_labels: true,
-      speakers_expected: 2,
-      sentiment_analysis: true,
-      punctuate: true,
-      format_text: true
-    })
+    body: JSON.stringify(payload)
   });
 
   if (!response.ok) {
-    throw new Error(`AssemblyAI transcript request failed with ${response.status}`);
+    const detail = await readAssemblyError(response);
+    const error = new Error(`AssemblyAI transcript request failed with ${response.status}: ${detail}`);
+    error.status = response.status;
+    error.detail = detail;
+    throw error;
   }
 
   return response.json();
+};
+
+const requestTranscript = async (audioUrl) => {
+  const basePayload = {
+    audio_url: audioUrl,
+    speech_models: speechModels(),
+    language_detection: true,
+    speaker_labels: true,
+    speakers_expected: 2,
+    punctuate: true,
+    format_text: true
+  };
+
+  try {
+    return await submitTranscriptRequest({
+      ...basePayload,
+      sentiment_analysis: true
+    });
+  } catch (error) {
+    if (error.status !== 400) throw error;
+    console.warn(`AssemblyAI rejected sentiment request, retrying diarization only: ${error.detail}`);
+    try {
+      return await submitTranscriptRequest(basePayload);
+    } catch (retryError) {
+      if (retryError.status !== 400) throw retryError;
+      console.warn(`AssemblyAI rejected speakers_expected, retrying speaker labels only: ${retryError.detail}`);
+      return submitTranscriptRequest({
+        audio_url: audioUrl,
+        speech_models: speechModels(),
+        speaker_labels: true,
+        punctuate: true,
+        format_text: true
+      });
+    }
+  }
 };
 
 const pollTranscript = async (id) => {
@@ -76,7 +128,8 @@ const pollTranscript = async (id) => {
     });
 
     if (!response.ok) {
-      throw new Error(`AssemblyAI polling failed with ${response.status}`);
+      const detail = await readAssemblyError(response);
+      throw new Error(`AssemblyAI polling failed with ${response.status}: ${detail}`);
     }
 
     const transcript = await response.json();
@@ -99,14 +152,16 @@ const mapSpeaker = (speaker, speakerMap) => {
 };
 
 const buildSentimentLookup = (sentimentResults = []) =>
-  sentimentResults.map((item) => ({
+  (sentimentResults ?? []).map((item) => ({
     start: item.start,
     end: item.end,
     score: sentimentScore[item.sentiment] ?? 0
   }));
 
 const findSentiment = (turn, lookup) => {
-  const match = lookup.find((item) => item.start <= turn.start && item.end >= turn.end);
+  const match = lookup
+    .filter((item) => item.start < turn.end && item.end > turn.start)
+    .sort((a, b) => Math.min(b.end, turn.end) - Math.max(b.start, turn.start) - (Math.min(a.end, turn.end) - Math.max(a.start, turn.start)))[0];
   return match?.score ?? 0;
 };
 
@@ -114,7 +169,20 @@ const toTranscriptTurns = (assemblyTranscript) => {
   const speakerMap = new Map();
   const sentimentLookup = buildSentimentLookup(assemblyTranscript.sentiment_analysis_results);
 
-  return (assemblyTranscript.utterances ?? []).map((turn) => ({
+  const utterances = assemblyTranscript.utterances ?? [];
+  const words = assemblyTranscript.words ?? [];
+  const turns = utterances.length
+    ? utterances
+    : [
+        {
+          start: words[0]?.start ?? 0,
+          end: words.at(-1)?.end ?? 0,
+          speaker: "A",
+          text: assemblyTranscript.text ?? ""
+        }
+      ].filter((turn) => turn.text);
+
+  return turns.map((turn) => ({
     time: formatTime(turn.start),
     start: formatTime(turn.start),
     end: formatTime(turn.end),

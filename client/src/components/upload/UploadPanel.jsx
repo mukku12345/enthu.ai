@@ -58,7 +58,7 @@ export default function UploadPanel({ onUploaded, existingCalls = [] }) {
         );
       }
       if (skipped.length) {
-        setError(uploaded.length ? skipped[0] : `${skipped.length} duplicate/skipped. ${skipped[0]}`);
+        setError(uploaded.length ? `${skipped.length} duplicate/skipped.` : `${skipped.length} duplicate/skipped. ${skipped[0]}`);
       }
       setFiles([]);
       event.currentTarget.reset();
@@ -110,7 +110,9 @@ export default function UploadPanel({ onUploaded, existingCalls = [] }) {
             <strong>{error && !notice ? "Upload skipped" : "Upload summary"}</strong>
             {notice && <p className="success-text">{notice}</p>}
             {error && !notice && <p className="error-text">{error}</p>}
-            {error && notice && <p className="muted-text">{error}</p>}
+            {error && notice && !error.toLowerCase().includes("upload failed") && (
+              <p className="muted-text">{error}</p>
+            )}
           </div>
           <button
             className="toast-close"

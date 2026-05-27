@@ -1,11 +1,11 @@
 import React from "react";
-import { Headphones } from "lucide-react";
+import { Headphones, RefreshCw, Trash2 } from "lucide-react";
 import EmotionChart from "./EmotionChart.jsx";
 import Flags from "./Flags.jsx";
 import Scorecard from "./Scorecard.jsx";
 import Transcript from "./Transcript.jsx";
 
-export default function CallDetail({ call, onRetry, onDismiss }) {
+export default function CallDetail({ call, onRetry, onDismiss, onRequestDelete }) {
   if (!call) {
     return (
       <section className="detail placeholder">
@@ -26,6 +26,26 @@ export default function CallDetail({ call, onRetry, onDismiss }) {
         <div className="detail-badges">
           <span className="provider-pill">{call.analysisProvider ?? "demo-fallback"}</span>
           <span className={`pill ${call.status}`}>{call.status}</span>
+          {call.status === "completed" && (
+            <button
+              className="secondary detail-action"
+              onClick={() => onRetry(call)}
+              title="Reanalyze call"
+              type="button"
+            >
+              <RefreshCw size={16} />
+              Reanalyze
+            </button>
+          )}
+          <button
+            className="detail-delete"
+            onClick={() => onRequestDelete(call)}
+            title="Delete call"
+            type="button"
+          >
+            <Trash2 size={16} />
+            Delete
+          </button>
         </div>
       </div>
 

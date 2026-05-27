@@ -1,15 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getCalls, retryCall } from "../api/callsApi.js";
+import { deleteCall, getCalls, getEvents, retryCall } from "../api/callsApi.js";
 
 const POLLING_INTERVAL_MS = 1800;
-const pipelineSteps = [
-  { delay: 0, type: "queued", message: "upload received", status: "queued", progress: 8 },
-  { delay: 650, type: "queued", message: "queued", status: "queued", progress: 18 },
-  { delay: 1400, type: "processing", message: "transcription started", status: "processing", progress: 36 },
-  { delay: 2300, type: "processing", message: "emotion analysis completed", status: "processing", progress: 62 },
-  { delay: 3100, type: "processing", message: "embeddings generated", status: "processing", progress: 84 },
-  { delay: 4000, type: "success", message: "completed", status: "completed", progress: 100 }
-];
 
 const timestamp = (offsetMinutes = 0) => {
   const date = new Date(Date.now() + offsetMinutes * 60 * 1000);
@@ -26,14 +18,15 @@ export function useCalls() {
   const syncSelectedCall = useCallback((freshCalls) => {
     setSelectedCall((current) => {
       if (!current) return freshCalls[0] ?? null;
-      return freshCalls.find((call) => call.id === current.id) ?? current;
+      return freshCalls.find((call) => call.id === current.id) ?? freshCalls[0] ?? null;
     });
   }, []);
 
   const loadCalls = useCallback(
     async (searchQuery = "") => {
-      const freshCalls = await getCalls(searchQuery);
+      const [freshCalls, freshEvents] = await Promise.all([getCalls(searchQuery), getEvents()]);
       setCalls(freshCalls);
+      setEvents(freshEvents);
       syncSelectedCall(freshCalls);
     },
     [syncSelectedCall]
@@ -69,44 +62,15 @@ export function useCalls() {
     }));
     setCalls((current) => [...stagedCalls, ...current]);
     setSelectedCall(stagedCalls[0]);
-    setEvents([]);
-
-    uploadedCalls.forEach((uploadedCall) => {
-      pipelineSteps.forEach((step, index) => {
-        window.setTimeout(() => {
-          const event = {
-            id: `${uploadedCall.id}-${index}-${Date.now()}`,
-            type: step.type,
-            message: `[${timestamp(index)}] ${step.message}`,
-            createdAt: new Date().toISOString()
-          };
-
-          setEvents((current) => [...current, event]);
-          setCalls((current) =>
-            current.map((item) =>
-              item.id === uploadedCall.id
-                ? {
-                    ...item,
-                    status: step.status,
-                    progress: step.progress,
-                    stage: step.message
-                  }
-                : item
-            )
-          );
-          setSelectedCall((current) =>
-            current?.id === uploadedCall.id
-              ? {
-                  ...current,
-                  status: step.status,
-                  progress: step.progress,
-                  stage: step.message
-                }
-              : current
-          );
-        }, step.delay);
-      });
-    });
+    setEvents((current) => [
+      ...uploadedCalls.map((uploadedCall) => ({
+        id: `upload-${uploadedCall.id}-${Date.now()}`,
+        type: "queued",
+        message: `[${timestamp()}] upload received for ${uploadedCall.fileName ?? uploadedCall.originalName}`,
+        createdAt: new Date().toISOString()
+      })),
+      ...current
+    ]);
   }, []);
 
   const upsertCall = useCallback((nextCall) => {
@@ -152,6 +116,35 @@ export function useCalls() {
     [calls]
   );
 
+  const deleteUploadedCall = useCallback(
+    async (call) => {
+      await deleteCall(call.id);
+      if (String(call.id).startsWith("demo-")) {
+        const hidden = JSON.parse(localStorage.getItem("hiddenDemoCalls") || "[]");
+        localStorage.setItem("hiddenDemoCalls", JSON.stringify([...new Set([...hidden, call.id])]));
+      }
+
+      setCalls((current) => {
+        const nextCalls = current.filter((item) => item.id !== call.id);
+        setSelectedCall((currentSelected) => {
+          if (currentSelected?.id !== call.id) return currentSelected;
+          return nextCalls[0] ?? null;
+        });
+        return nextCalls;
+      });
+      setEvents((current) => [
+        {
+          id: `deleted-${call.id}-${Date.now()}`,
+          type: "info",
+          message: `[${timestamp()}] deleted ${call.fileName ?? call.originalName}`,
+          createdAt: new Date().toISOString()
+        },
+        ...current
+      ]);
+    },
+    []
+  );
+
   return {
     calls,
     events,
@@ -162,6 +155,7 @@ export function useCalls() {
     searchCalls,
     handleUploadedCall,
     retryFailedCall,
-    dismissFailedCall
+    dismissFailedCall,
+    deleteUploadedCall
   };
 }
