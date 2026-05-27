@@ -23,6 +23,7 @@ export default function UploadPanel({ onUploaded, existingCalls = [] }) {
     event.preventDefault();
     if (!files.length) return;
 
+    const form = event.currentTarget;
     setUploading(true);
 
     try {
@@ -72,7 +73,7 @@ export default function UploadPanel({ onUploaded, existingCalls = [] }) {
         toast.warning(skippedMessage, { toastId: "upload-skipped" });
       }
       setFiles([]);
-      event.currentTarget.reset();
+      form.reset();
     } catch (err) {
       toast.error(uploadErrorMessage(err), { toastId: "upload-error" });
     } finally {

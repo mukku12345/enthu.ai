@@ -9,17 +9,23 @@ export const notifyFailure = async (call, reason) => {
       type: "failure",
       callId: call.id,
       fileName: call.originalName,
-      message: `Slack alert sent to QA ops: Transcription failed for call ${call.originalName}. ${reason}`
+      message: `Slack alert skipped because SLACK_WEBHOOK_URL is not configured: ${call.originalName}. ${reason}`
     });
     return;
   }
 
   try {
-    await fetch(process.env.SLACK_WEBHOOK_URL, {
+    const response = await fetch(process.env.SLACK_WEBHOOK_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text })
     });
+
+    if (!response.ok) {
+      const detail = await response.text();
+      throw new Error(`Slack webhook failed with ${response.status}: ${detail}`);
+    }
+
     addEvent({
       type: "failure",
       callId: call.id,
@@ -32,7 +38,7 @@ export const notifyFailure = async (call, reason) => {
       type: "failure",
       callId: call.id,
       fileName: call.originalName,
-      message: `Slack alert simulated after notification send failed: ${call.originalName}. ${reason}`
+      message: `Slack alert failed: ${call.originalName}. ${reason}. ${error.message}`
     });
   }
 };
