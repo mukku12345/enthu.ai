@@ -2,6 +2,8 @@ import { getCall, updateCall } from "./store.js";
 import { addEvent } from "./eventLog.js";
 import { notifyFailure } from "./notifier.js";
 import { transcribeCallWithProvider } from "./transcriptionProvider.js";
+import { canGenerateEmbeddings, createEmbedding, getEmbeddingConfig } from "./embeddingProvider.js";
+import { buildSemanticText } from "./semanticText.js";
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const hasAssemblyAI = () => Boolean(process.env.ASSEMBLYAI_API_KEY);
@@ -383,15 +385,11 @@ export const processCall = async (callId) => {
     await wait(300);
 
     const scorecard = providerResult ? scoreTranscript(transcript, seed) : scoreCall(seed);
-    const flags = providerResult
-      ? buildFlags(scorecard, transcript)
-      : ["Angry customer", "Refund issue", "Escalation", "Agent empathy gap"];
+    const flags = buildFlags(scorecard, transcript);
     if (scorecard.resolution < 75) flags.push("Unresolved");
     if (scorecard.process < 75) flags.push("Process missed");
 
-    const summary = providerResult
-      ? summarizeTranscript(transcript, seed)
-      : "The customer contacted support about a billing or fulfillment issue and began the call frustrated. The agent verified the account, acknowledged the concern, identified the actionable fix, and closed by sending confirmation. The highest-risk moment occurred when the customer challenged prior follow-through; the agent recovered by moving from explanation to resolution.";
+    const summary = summarizeTranscript(transcript, seed);
 
     const resolutionStatus = scorecard.resolution >= 80 ? "Resolved" : "Unresolved";
     const customerSentiment = getCustomerSentiment(transcript);
@@ -405,11 +403,44 @@ export const processCall = async (callId) => {
     });
     await wait(300);
 
+    const searchableCall = {
+      ...call,
+      transcript,
+      summary,
+      scorecard,
+      flags,
+      flagDetails: buildFlagDetails(flags),
+      timelineInsights: buildTimelineInsights(transcript, scorecard),
+      segmentAnalysis: buildSegmentAnalysis(transcript),
+      resolutionStatus,
+      customerSentiment,
+      overallScore: scorecard.overall
+    };
+    const semanticText = buildSemanticText(searchableCall);
+    const embeddingPatch = {};
+
+    if (canGenerateEmbeddings()) {
+      try {
+        const semanticEmbedding = await createEmbedding(semanticText);
+        const embeddingConfig = getEmbeddingConfig();
+        if (semanticEmbedding?.length) {
+          embeddingPatch.semanticEmbedding = semanticEmbedding;
+          embeddingPatch.semanticEmbeddingModel = embeddingConfig.model;
+          embeddingPatch.semanticEmbeddingProvider = embeddingConfig.provider;
+          embeddingPatch.semanticEmbeddingUpdatedAt = new Date();
+        }
+      } catch (error) {
+        console.warn(`Semantic embedding generation failed for ${call.originalName}: ${error.message}`);
+      }
+    }
+
     addEvent({
       type: "processing",
       callId,
       fileName: call.originalName,
-      message: `Semantic search text generated for ${call.originalName}`
+      message: embeddingPatch.semanticEmbedding
+        ? `Semantic embedding generated for ${call.originalName}`
+        : `Semantic search text generated for ${call.originalName}`
     });
 
     await updateCall(callId, {
@@ -422,14 +453,15 @@ export const processCall = async (callId) => {
       transcript,
       summary,
       scorecard,
-      emotionTimeline: providerResult ? buildEmotionTimelineFromTranscript(transcript) : buildEmotionTimeline(),
+      emotionTimeline: buildEmotionTimelineFromTranscript(transcript),
       flags,
       flagDetails: buildFlagDetails(flags),
       timelineInsights: buildTimelineInsights(transcript, scorecard),
       segmentAnalysis: buildSegmentAnalysis(transcript),
       resolutionStatus,
       customerSentiment,
-      semanticText: `${summary} ${flags.join(" ")} ${resolutionStatus} ${customerSentiment} ${textFromTranscript(transcript)}`,
+      semanticText,
+      ...embeddingPatch,
       processedAt: new Date()
     });
     addEvent({

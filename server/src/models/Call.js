@@ -92,6 +92,10 @@ const callSchema = new mongoose.Schema(
     resolutionStatus: String,
     customerSentiment: String,
     semanticText: String,
+    semanticEmbedding: [Number],
+    semanticEmbeddingModel: String,
+    semanticEmbeddingProvider: String,
+    semanticEmbeddingUpdatedAt: Date,
     failureReason: String,
     processedAt: Date
   },

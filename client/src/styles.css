@@ -279,7 +279,7 @@ h3 {
   align-items: start;
   display: grid;
   gap: 18px;
-  grid-template-columns: minmax(620px, 1.28fr) minmax(500px, 1fr);
+  grid-template-columns: minmax(0, 55%) minmax(0, 1fr);
 }
 
 .left-pane,
@@ -652,6 +652,15 @@ h3 {
   margin-top: 18px;
 }
 
+.transcript {
+  background: #fbfcfd;
+  border: 1px solid #e0e7ed;
+  border-radius: 8px;
+  max-height: min(58vh, 560px);
+  overflow: auto;
+  padding: 14px;
+}
+
 .chart {
   height: 290px;
   margin-top: 10px;
@@ -689,7 +698,7 @@ h3 {
   border-left: 3px solid #9fb2c2;
   display: grid;
   gap: 6px;
-  grid-template-columns: 56px 88px 1fr;
+  grid-template-columns: 48px 76px minmax(0, 1fr);
   margin-top: 10px;
   padding: 10px 0 10px 12px;
 }
@@ -703,6 +712,7 @@ h3 {
 }
 
 .turn p {
+  font-size: 0.93rem;
   line-height: 1.5;
   margin: 0;
   overflow-wrap: anywhere;
@@ -772,6 +782,8 @@ h3 {
   background: #f8fafb;
   border: 1px solid #e0e7ed;
   border-radius: 8px;
+  max-height: 220px;
+  overflow: auto;
   padding: 14px;
 }
 
@@ -921,11 +933,11 @@ h3 {
   }
 
   .workspace {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 55%) minmax(0, 1fr);
   }
 
-  .detail {
-    order: 2;
+  .transcript {
+    max-height: 520px;
   }
 }
 
@@ -933,6 +945,10 @@ h3 {
   .upload-panel,
   .workspace {
     grid-template-columns: 1fr;
+  }
+
+  .transcript {
+    max-height: 520px;
   }
 
   .upload-message {
@@ -1014,6 +1030,10 @@ h3 {
 
   .turn {
     grid-template-columns: 1fr;
+  }
+
+  .transcript {
+    max-height: 460px;
   }
 
   .search-box {

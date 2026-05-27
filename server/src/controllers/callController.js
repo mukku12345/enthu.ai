@@ -77,7 +77,7 @@ export const retryCall = async (req, res) => {
 export const listCallRecords = async (req, res) => {
   const calls = await listCalls();
   const query = String(req.query.q ?? "").trim();
-  res.json(query ? rankByMeaning(calls, query) : calls);
+  res.json(query ? await rankByMeaning(calls, query) : calls);
 };
 
 export const getCallRecord = async (req, res) => {
